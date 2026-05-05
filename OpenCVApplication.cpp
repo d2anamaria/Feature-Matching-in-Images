@@ -71,7 +71,7 @@ int hammingDistance(const uchar* d1, const uchar* d2, int length) {
 }
 
 // for each descriptor in image1, find the closest descriptor in image2
-// one-directional: multiple descriptors from image1 may match the same descriptor in image2.
+// ONE-DIRECTIONAL: multiple descriptors from image1 may match the same descriptor in image2.
 vector<DMatch> matchNearestNeighbor(const Mat_<uchar>& descriptors1, const Mat_<uchar>& descriptors2) {
     vector<DMatch>  matches;
 
@@ -95,11 +95,53 @@ vector<DMatch> matchNearestNeighbor(const Mat_<uchar>& descriptors1, const Mat_<
    return matches;
 }
 
+// ONE-DIRECTIONAL
+// removes inconclusive matches (best match too similar to second best)
+vector<DMatch> matchRatioTest(const Mat_<uchar>& descriptors1, const Mat_<uchar>& descriptors2, float ratioThreshold = 0.75f) {
+
+    vector<DMatch>  matches;
+
+    for (int i = 0; i < descriptors1.rows; i++) {
+        int matchIndex=-1;
+        int matchDist=INT_MAX;
+        int secondBestDist=INT_MAX;
+
+        for (int j = 0; j < descriptors2.rows; j++) {
+            int dist=hammingDistance( descriptors1.ptr<uchar>(i),descriptors2.ptr<uchar>(j),descriptors1.cols);
+
+            if (dist<matchDist) {
+                secondBestDist = matchDist;
+                matchDist = dist;
+                matchIndex = j;
+            }
+            else if (dist<secondBestDist)
+                secondBestDist = dist;
+
+        }
+
+        if (matchIndex>=0 && (secondBestDist==INT_MAX || (float)matchDist / secondBestDist < ratioThreshold)) {
+                matches.push_back(DMatch(i, matchIndex, matchDist));
+
+        }
+
+    }
+    return matches;
+}
+
+vector<DMatch> matchRatioTest(const Mat_<uchar>& descriptors1, const Mat_<uchar>& descriptors2) {
+    return matchRatioTest(descriptors1,descriptors2,0.75f);
+}
+
+using OneWayMatcher = vector<DMatch> (*)(
+    const Mat_<uchar>&,
+    const Mat_<uchar>&
+);
+
 // cross-check
 // bidirectional (INTERSECTION op) - both matches coming form both images must agree
-vector<DMatch> matchCrossCheck(const Mat_<uchar>& descriptors1, const Mat_<uchar>& descriptors2) {
-    auto matches1=matchNearestNeighbor(descriptors1,descriptors2);
-    auto matches2=matchNearestNeighbor(descriptors2,descriptors1);
+vector<DMatch> matchCrossCheck(const Mat_<uchar>& descriptors1, const Mat_<uchar>& descriptors2, OneWayMatcher oneWayMatcher) {
+    auto matches1=oneWayMatcher(descriptors1,descriptors2);
+    auto matches2=oneWayMatcher(descriptors2,descriptors1);
 
     vector<DMatch> matches;
 
@@ -286,19 +328,31 @@ int main()
         goodMatchesBuiltIn
     );
 
-    auto matches1=matchUnique(descriptors1, descriptors2);
-    auto goodMatches1=filterBestMatches(matches1, maxMatches);
-    showMatches("Manual unique-on-image2 matching",img1,keypoints1,img2,keypoints2,goodMatches1);
+    // auto matches1=matchUnique(descriptors1, descriptors2);
+    // auto goodMatches1=filterBestMatches(matches1, maxMatches);
+    // showMatches("Manual unique-on-image2 matching",img1,keypoints1,img2,keypoints2,goodMatches1);
 
-    auto matches2=matchCrossCheck(descriptors1, descriptors2);
-    auto goodMatches2=filterBestMatches(matches2, maxMatches);
-    showMatches("Manual mutual matching",img1,keypoints1,img2,keypoints2,goodMatches2);
+    auto matchesClosest=matchCrossCheck(descriptors1, descriptors2,matchNearestNeighbor);
+    auto goodMatchesClosest=filterBestMatches(matchesClosest, maxMatches);
+    showMatches("Manual mutual matching (closest neighb)",img1,keypoints1,img2,keypoints2,goodMatchesClosest);
 
-    auto onlyIn1 = differenceMatches(goodMatches1, goodMatches2);
-    auto onlyIn2 = differenceMatches(goodMatches2, goodMatches1);
+    auto matchesRatio=matchCrossCheck(descriptors1, descriptors2,matchRatioTest);
+    auto goodMatchesRatio=filterBestMatches(matchesRatio, maxMatches);
+    showMatches("Manual mutual matching (ratio test)",img1,keypoints1,img2,keypoints2,goodMatchesRatio);
 
-    showMatches("Only in match1", img1, keypoints1, img2, keypoints2, onlyIn1);
-    showMatches("Only in match2", img1, keypoints1, img2, keypoints2, onlyIn2);
+    // compare diff vs union implementations
+    // auto onlyIn1 = differenceMatches(goodMatches1, goodMatchesClosest);
+    // auto onlyInClosest = differenceMatches(goodMatchesClosest, goodMatches1);
+    // showMatches("{DIFF} \\ {UNION}", img1, keypoints1, img2, keypoints2, onlyIn1);
+    // showMatches("{UNION} \\ {DIFF}", img1, keypoints1, img2, keypoints2, onlyInClosest);
+
+
+    //compare closest neighb vs ratio test implementations
+    auto onlyInRatio= differenceMatches(goodMatchesRatio, goodMatchesClosest);
+    auto onlyInClosest2= differenceMatches(goodMatchesClosest, goodMatchesRatio);
+    showMatches("{Ratio Test} \\ {Closest neighb}",img1, keypoints1, img2, keypoints2, onlyInRatio);
+    showMatches("{Closest neighb} \\ {Ratio Test}",img1, keypoints1, img2, keypoints2, onlyInClosest2);
+
 
     waitKey(0);
     return 0;
