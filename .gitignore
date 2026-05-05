@@ -1,0 +1,38 @@
+# CMake build folders
+cmake-build-*/
+build/
+out/
+
+# CLion / IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Executables
+OpenCVapp
+*.exe
+*.out
+*.app
+
+# Object / binary files
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+compile_commands.json
+
+# OpenCV local binaries / copied library package
+OpenCV/dll/
+OpenCV/lib/
+
+# Optional: large docs
+doc/*.pdf
