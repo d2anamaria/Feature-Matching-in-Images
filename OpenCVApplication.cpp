@@ -36,6 +36,197 @@ void extractFeatures(const Mat_<uchar>& img, vector<KeyPoint>& keypoints, Mat_<u
     );
 }
 
+//----------------------------------------- DESCRIPTORS DEF ------------------------------------
+
+// descriptors that store intensities, not relativity
+Mat_<uchar> computeDescriptors(const Mat_<uchar>& img, const vector<KeyPoint>& keypoints, int patchSize = 16)
+{
+
+    int half=patchSize/2;
+    Mat_<uchar> descriptors( (int)keypoints.size(), patchSize * patchSize);
+
+    for (int k = 0; k < keypoints.size(); k++) {
+        Point2f pt = keypoints[k].pt;
+
+        for (int u = -half; u < half; u++) {
+            for (int v = -half; v < half; v++) {
+                int y = pt.y + u;
+                int x = pt.x + v;
+
+                int idx = (u + half) * patchSize + (v + half); //idx inside patch
+
+                if (y >= 0 && y < img.rows && x >= 0 && x < img.cols)
+                    descriptors(k, idx) = img(y, x);
+                else
+                    descriptors(k, idx) = 0;
+            }
+        }
+    }
+
+    return descriptors;
+}
+
+bool isInside2(const Mat_<uchar>& img, int i, int j) {
+    return 0 <= i && i < img.rows &&
+           0 <= j && j < img.cols;
+}
+
+// binary descriptors storing relative intensity comparisons
+// each bit says: is current patch pixel brighter than its neighbor?
+Mat_<uchar> computeBinaryDescriptors(const Mat_<uchar>& img, const vector<KeyPoint>& keypoints, int patchSize = 16)
+{
+    int half = patchSize / 2;
+
+    // compare each patch pixel with right and down neighbor
+    int nrComparisons = patchSize * patchSize * 2;
+
+    // 8 comparisons are packed into 1 byte
+    int descriptorBytes = (nrComparisons + 7) / 8;
+
+    Mat_<uchar> descriptors((int)keypoints.size(), descriptorBytes);
+    descriptors.setTo(0);
+
+    for (int k = 0; k < keypoints.size(); k++) {
+        Point2f pt = keypoints[k].pt;
+
+        int bitIdx = 0;
+
+        for (int u = -half; u < half; u++) {
+            for (int v = -half; v < half; v++) {
+                int y = (int)pt.y + u;
+                int x = (int)pt.x + v;
+
+                // comparison 1: current pixel vs right neighbor
+                if (isInside2(img, y, x) && isInside2(img, y, x + 1) && v + 1 < half)
+                    if (img(y, x) > img(y, x + 1))
+                        descriptors(k, bitIdx / 8) |= (1 << (bitIdx % 8));
+                bitIdx++;
+
+                // comparison 2: current pixel vs down neighbor
+                if (isInside2(img, y, x) && isInside2(img, y + 1, x) && u + 1 < half)
+                    if (img(y, x) > img(y + 1, x))
+                        descriptors(k, bitIdx / 8) |= (1 << (bitIdx % 8));
+                bitIdx++;
+            }
+        }
+    }
+
+    return descriptors;
+}
+
+// use ORB to calc descriptors for already manually detected keypoints
+Mat_<uchar> computeORBDescriptors(const Mat_<uchar>& img, vector<KeyPoint>& keypoints, int patchSize = 16)
+{
+    Ptr<ORB> orb = ORB::create();
+    Mat_<uchar> descriptors;
+
+    orb->compute(
+        img,
+        keypoints,
+        descriptors
+    );
+
+    return descriptors;
+}
+
+
+
+//----------------------------------------- EXTRACTION ------------------------------------
+float harrisValue(float Ixx, float Iyy, float Ixy)
+{
+    float k = 0.04f; // suppress trace to penalize edges (det grows much faster than trace^2)
+
+    // det large when strong intensity variation exists in TWO independent directions
+    // Ixy² penalizes highly correlated gradients (e.g. diagonal edges)
+    float det = Ixx * Iyy - Ixy * Ixy;
+
+    // total intensity variation, alone cannot distinguish between corner or edge
+    float trace = Ixx + Iyy;
+
+    // Harris response:
+    // large positive -> corner
+    // negative/small -> edge or flat region
+    return det - k * trace * trace;
+}
+
+
+void harrisCornerDetection(
+    const Mat_<uchar>& img,
+    vector<KeyPoint>& keypoints,
+    Mat_<uchar>& descriptors
+) {
+
+    Mat_<uchar> smooth;
+    GaussianBlur(img, smooth, Size(5, 5), 1.0); //?? best kernel?
+
+    Mat_<float> Ix, Iy;
+    Sobel(smooth, Ix, CV_32F, 1, 0, 3); //first derivative on x axis
+    Sobel(smooth, Iy, CV_32F, 0, 1, 3); //first derivative on y axis
+
+
+    Mat_<float> R(img.size());
+    R.setTo(0);
+
+    int window=3;
+    int k=window/2;
+    float maxR = 0;
+
+    // E(u,v) = Σ [ I(x+u,y+v)-I(x,y) ]²
+    // Taylor expansion : I(x+u,y+v) ≈ I(x,y) + Ix*u + Iy*v
+
+    // => E(u,v) = ≈ Σ [ Ix*u + Iy*v ]² = = Σ (Ix²u² + 2IxIyuv + Iy²v²) = = u²ΣIx² + 2uvΣIxIy + v²ΣIy²
+    // this way we avoid computation overhead from  shifting
+
+    for (int i=k;i<img.rows-k;i++) {
+        for (int j=k;j<img.cols-k;j++) {
+            float Ixx = 0;
+            float Iyy = 0;
+            float Ixy = 0;
+
+            for (int u=-k; u<=k; u++) {
+                for (int v=-k; v<=k; v++) {
+                    float gx = Ix(i + u, j + v);
+                    float gy = Iy(i + u, j + v);
+
+                    Ixx += gx * gx;
+                    Iyy += gy * gy;
+                    Ixy += gx * gy; // higher value if gradients are strongly correlated
+                }
+            }
+
+            R(i, j) = harrisValue(Ixx, Iyy, Ixy);
+            maxR = max(maxR, R(i, j));
+        }
+    }
+
+    // filter redundant dupes of features - keep only pixel that best represents the corner
+    // should compare to average in window?
+    float T = 0.005f * maxR;
+    k=8;
+
+    for (int i=k;i<img.rows-k;i++) {
+        for (int j=k;j<img.cols-k;j++) {
+            if (R(i,j)<T) continue;
+
+            bool localMax = true;
+
+            for (int u=-k; u<=k; u++) {
+                for (int v=-k; v<=k; v++) {
+                    if (R(i + u, j + v) > R(i,j)) {
+                        localMax = false;
+                        break;
+                    }
+                }
+            }
+
+            if (localMax) {
+                keypoints.push_back(KeyPoint(Point2f(j, i), 16));
+            }
+        }
+    }
+
+    descriptors = computeORBDescriptors(img, keypoints);
+}
 
 
 //-----------------------------------------MATCHING------------------------------------
@@ -127,6 +318,7 @@ vector<DMatch> matchRatioTest(const Mat_<uchar>& descriptors1, const Mat_<uchar>
     }
     return matches;
 }
+
 
 vector<DMatch> matchRatioTest(const Mat_<uchar>& descriptors1, const Mat_<uchar>& descriptors2) {
     return matchRatioTest(descriptors1,descriptors2,0.75f);
@@ -234,6 +426,7 @@ vector<DMatch> filterBestMatches(vector<DMatch> matches, int maxMatches)
 }
 
 
+
 // ------------------------ drawing -------------------------
 
 
@@ -293,6 +486,8 @@ int main()
     Mat_<uchar> img1=imread(path1, IMREAD_GRAYSCALE);
     Mat_<uchar> img2=imread(path2, IMREAD_GRAYSCALE);
 
+
+    //--------------------------------------------------------------- BUILT IN EXTRACTION
     vector<KeyPoint> keypoints1, keypoints2;
     Mat_<uchar> descriptors1, descriptors2;
 
@@ -306,18 +501,33 @@ int main()
         cout<<"No descriptors found."<<endl;
         return -1;
     }
+    showKeypoints("Keypoints image 1",img1,keypoints1);
+    showKeypoints("Keypoints image 2",img2,keypoints2);
+
+    vector<KeyPoint> keypointsHarris1, keypointsHarris2;
+    Mat_<uchar> descriptorsHarris1, descriptorsHarris2;
+
+
+    // ------------------------------------------------------------------------HARRIS CORNER DETECTION
+    harrisCornerDetection(img1, keypointsHarris1, descriptorsHarris1);
+    harrisCornerDetection(img2, keypointsHarris2, descriptorsHarris2);
+
+    cout << "Harris keypoints 1: " << keypointsHarris1.size() << endl;
+    cout << "Harris keypoints 2: " << keypointsHarris2.size() << endl;
+
+    showKeypoints("Harris keypoints image 1", img1, keypointsHarris1);
+    showKeypoints("Harris keypoints image 2", img2, keypointsHarris2);
+
 
     // ------------------------------------------ MATCHING ---------------------------------------------
 
-    int maxMatches=50;
+    //----------------------------------------------------------------------------------- BUILT IN MATCHING
+    int maxMatches=30;
     auto matchesBuiltIn=matchDescriptorsBuiltIn(descriptors1, descriptors2);
     auto goodMatchesBuiltIn=filterBestMatches(matchesBuiltIn, maxMatches);
 
-    // cout<<"Total matches: "<<matches.size()<<endl;
-    // cout<<"Displayed matches: "<<goodMatches.size()<<endl;
-
-    // showKeypoints("Keypoints image 1",img1,keypoints1);
-    // showKeypoints("Keypoints image 2",img2,keypoints2);
+    cout<<"Total matches: "<<matchesBuiltIn.size()<<endl;
+    cout<<"Displayed matches: "<<goodMatchesBuiltIn.size()<<endl;
 
     showMatches(
         "OpenCV BFMatcher crossCheck",
@@ -328,18 +538,37 @@ int main()
         goodMatchesBuiltIn
     );
 
+    auto matchesHarrisBuiltIn = matchDescriptorsBuiltIn(descriptorsHarris1, descriptorsHarris2);
+    auto goodMatchesHarrisBuiltIn = filterBestMatches(matchesHarrisBuiltIn, maxMatches);
+
+    cout<<"Total matches HARRIS: "<<matchesHarrisBuiltIn.size()<<endl;
+    cout<<"Displayed matches HARRIS: "<<goodMatchesHarrisBuiltIn.size()<<endl;
+
+    showMatches("HARRIS matches",
+        img1,
+        keypointsHarris1,
+        img2,
+        keypointsHarris2,
+        goodMatchesHarrisBuiltIn
+        );
+
+    //------------------------------------------------------------------------------------- MANUAL MATCHING
+
     // auto matches1=matchUnique(descriptors1, descriptors2);
     // auto goodMatches1=filterBestMatches(matches1, maxMatches);
     // showMatches("Manual unique-on-image2 matching",img1,keypoints1,img2,keypoints2,goodMatches1);
 
-    auto matchesClosest=matchCrossCheck(descriptors1, descriptors2,matchNearestNeighbor);
-    auto goodMatchesClosest=filterBestMatches(matchesClosest, maxMatches);
-    showMatches("Manual mutual matching (closest neighb)",img1,keypoints1,img2,keypoints2,goodMatchesClosest);
+    // auto matchesClosest=matchCrossCheck(descriptors1, descriptors2,matchNearestNeighbor);
+    // auto goodMatchesClosest=filterBestMatches(matchesClosest, maxMatches);
+    // showMatches("Manual mutual matching (closest neighb)",img1,keypoints1,img2,keypoints2,goodMatchesClosest);
+    //
+    // auto matchesRatio=matchCrossCheck(descriptors1, descriptors2,matchRatioTest);
+    // auto goodMatchesRatio=filterBestMatches(matchesRatio, maxMatches);
+    // showMatches("Manual mutual matching (ratio test)",img1,keypoints1,img2,keypoints2,goodMatchesRatio);
 
-    auto matchesRatio=matchCrossCheck(descriptors1, descriptors2,matchRatioTest);
-    auto goodMatchesRatio=filterBestMatches(matchesRatio, maxMatches);
-    showMatches("Manual mutual matching (ratio test)",img1,keypoints1,img2,keypoints2,goodMatchesRatio);
 
+
+    //------------------------------------------------------------------------------------  COMPARISONS
     // compare diff vs union implementations
     // auto onlyIn1 = differenceMatches(goodMatches1, goodMatchesClosest);
     // auto onlyInClosest = differenceMatches(goodMatchesClosest, goodMatches1);
@@ -348,10 +577,10 @@ int main()
 
 
     //compare closest neighb vs ratio test implementations
-    auto onlyInRatio= differenceMatches(goodMatchesRatio, goodMatchesClosest);
-    auto onlyInClosest2= differenceMatches(goodMatchesClosest, goodMatchesRatio);
-    showMatches("{Ratio Test} \\ {Closest neighb}",img1, keypoints1, img2, keypoints2, onlyInRatio);
-    showMatches("{Closest neighb} \\ {Ratio Test}",img1, keypoints1, img2, keypoints2, onlyInClosest2);
+    // auto onlyInRatio= differenceMatches(goodMatchesRatio, goodMatchesClosest);
+    // auto onlyInClosest2= differenceMatches(goodMatchesClosest, goodMatchesRatio);
+    // showMatches("{Ratio Test} \\ {Closest neighb}",img1, keypoints1, img2, keypoints2, onlyInRatio);
+    // showMatches("{Closest neighb} \\ {Ratio Test}",img1, keypoints1, img2, keypoints2, onlyInClosest2);
 
 
     waitKey(0);
