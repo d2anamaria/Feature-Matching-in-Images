@@ -22,10 +22,10 @@ using namespace cv;
 
 const char* projectPath;
 
-
+// extraction: FAST + rotated BRIEF for description
 void extractFeatures(const Mat_<uchar>& img, vector<KeyPoint>& keypoints, Mat_<uchar>& descriptors)
 {
-    Ptr<ORB> orb=ORB::create(1000);
+    Ptr<ORB> orb=ORB::create(3000);
 
     // whole image analyzed, extraction of keypoints and descriptor calc done in one
     orb->detectAndCompute(
@@ -200,7 +200,7 @@ void harrisCornerDetection(
     }
 
     // filter redundant dupes of features - keep only pixel that best represents the corner
-    // should compare to average in window?
+    // ?should compare to average in window?
     float T = 0.005f * maxR;
     k=8;
 
@@ -425,6 +425,49 @@ vector<DMatch> filterBestMatches(vector<DMatch> matches, int maxMatches)
     return matches;
 }
 
+// ------------------------------------ MATCHING EVALUATION -------------------------------------------
+
+void evaluateMatchesWithAffine(
+    const vector<KeyPoint>& keypoints1,
+    const vector<KeyPoint>& keypoints2,
+    const vector<DMatch>& matches
+) {
+    vector<Point2f> pts1, pts2;
+
+    for (const auto& m : matches) {
+        pts1.push_back(keypoints1[m.queryIdx].pt);
+        pts2.push_back(keypoints2[m.trainIdx].pt);
+    }
+
+    if (pts1.size() < 3) {
+        cout << "Not enough matches for affine estimation." << endl;
+        return;
+    }
+
+    Mat inlierMask;
+
+    Mat affine = estimateAffinePartial2D(
+        pts1,
+        pts2,
+        inlierMask,
+        RANSAC,
+        3.0
+    );
+
+    if (affine.empty()) {
+        cout << "Affine estimation failed." << endl;
+        return;
+    }
+
+    int inliers = countNonZero(inlierMask);
+    double inlierRatio = (double)inliers / matches.size();
+
+    cout << "Affine inliers: " << inliers << " / " << matches.size() << endl;
+    cout << "Inlier ratio: " << inlierRatio * 100 << "%" << endl;
+}
+
+// estimateAffinePartial2D manual implement
+// highloght correct vs incorrect (red) after affine eval
 
 
 // ------------------------ drawing -------------------------
@@ -509,14 +552,14 @@ int main()
 
 
     // ------------------------------------------------------------------------HARRIS CORNER DETECTION
-    harrisCornerDetection(img1, keypointsHarris1, descriptorsHarris1);
-    harrisCornerDetection(img2, keypointsHarris2, descriptorsHarris2);
-
-    cout << "Harris keypoints 1: " << keypointsHarris1.size() << endl;
-    cout << "Harris keypoints 2: " << keypointsHarris2.size() << endl;
-
-    showKeypoints("Harris keypoints image 1", img1, keypointsHarris1);
-    showKeypoints("Harris keypoints image 2", img2, keypointsHarris2);
+    // harrisCornerDetection(img1, keypointsHarris1, descriptorsHarris1);
+    // harrisCornerDetection(img2, keypointsHarris2, descriptorsHarris2);
+    //
+    // cout << "Harris keypoints 1: " << keypointsHarris1.size() << endl;
+    // cout << "Harris keypoints 2: " << keypointsHarris2.size() << endl;
+    //
+    // showKeypoints("Harris keypoints image 1", img1, keypointsHarris1);
+    // showKeypoints("Harris keypoints image 2", img2, keypointsHarris2);
 
 
     // ------------------------------------------ MATCHING ---------------------------------------------
@@ -526,8 +569,8 @@ int main()
     auto matchesBuiltIn=matchDescriptorsBuiltIn(descriptors1, descriptors2);
     auto goodMatchesBuiltIn=filterBestMatches(matchesBuiltIn, maxMatches);
 
-    cout<<"Total matches: "<<matchesBuiltIn.size()<<endl;
-    cout<<"Displayed matches: "<<goodMatchesBuiltIn.size()<<endl;
+    // cout<<"Total matches: "<<matchesBuiltIn.size()<<endl;
+    // cout<<"Displayed matches: "<<goodMatchesBuiltIn.size()<<endl;
 
     showMatches(
         "OpenCV BFMatcher crossCheck",
@@ -538,19 +581,22 @@ int main()
         goodMatchesBuiltIn
     );
 
-    auto matchesHarrisBuiltIn = matchDescriptorsBuiltIn(descriptorsHarris1, descriptorsHarris2);
-    auto goodMatchesHarrisBuiltIn = filterBestMatches(matchesHarrisBuiltIn, maxMatches);
+    printf("Built In:\n");
+    evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesBuiltIn);
 
-    cout<<"Total matches HARRIS: "<<matchesHarrisBuiltIn.size()<<endl;
-    cout<<"Displayed matches HARRIS: "<<goodMatchesHarrisBuiltIn.size()<<endl;
-
-    showMatches("HARRIS matches",
-        img1,
-        keypointsHarris1,
-        img2,
-        keypointsHarris2,
-        goodMatchesHarrisBuiltIn
-        );
+    // auto matchesHarrisBuiltIn = matchDescriptorsBuiltIn(descriptorsHarris1, descriptorsHarris2);
+    // auto goodMatchesHarrisBuiltIn = filterBestMatches(matchesHarrisBuiltIn, maxMatches);
+    //
+    // cout<<"Total matches HARRIS: "<<matchesHarrisBuiltIn.size()<<endl;
+    // cout<<"Displayed matches HARRIS: "<<goodMatchesHarrisBuiltIn.size()<<endl;
+    //
+    // showMatches("HARRIS matches",
+    //     img1,
+    //     keypointsHarris1,
+    //     img2,
+    //     keypointsHarris2,
+    //     goodMatchesHarrisBuiltIn
+    //     );
 
     //------------------------------------------------------------------------------------- MANUAL MATCHING
 
@@ -558,15 +604,19 @@ int main()
     // auto goodMatches1=filterBestMatches(matches1, maxMatches);
     // showMatches("Manual unique-on-image2 matching",img1,keypoints1,img2,keypoints2,goodMatches1);
 
-    // auto matchesClosest=matchCrossCheck(descriptors1, descriptors2,matchNearestNeighbor);
-    // auto goodMatchesClosest=filterBestMatches(matchesClosest, maxMatches);
-    // showMatches("Manual mutual matching (closest neighb)",img1,keypoints1,img2,keypoints2,goodMatchesClosest);
-    //
-    // auto matchesRatio=matchCrossCheck(descriptors1, descriptors2,matchRatioTest);
-    // auto goodMatchesRatio=filterBestMatches(matchesRatio, maxMatches);
-    // showMatches("Manual mutual matching (ratio test)",img1,keypoints1,img2,keypoints2,goodMatchesRatio);
+    auto matchesClosest=matchCrossCheck(descriptors1, descriptors2,matchNearestNeighbor);
+    auto goodMatchesClosest=filterBestMatches(matchesClosest, maxMatches);
+    showMatches("Manual mutual matching (closest neighb)",img1,keypoints1,img2,keypoints2,goodMatchesClosest);
+
+    auto matchesRatio=matchCrossCheck(descriptors1, descriptors2,matchRatioTest);
+    auto goodMatchesRatio=filterBestMatches(matchesRatio, maxMatches);
+    showMatches("Manual mutual matching (ratio test)",img1,keypoints1,img2,keypoints2,goodMatchesRatio);
 
 
+    printf("\nNearest Neighb:\n");
+    evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesClosest);
+    printf("\nRatio Test:\n");
+    evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesRatio);
 
     //------------------------------------------------------------------------------------  COMPARISONS
     // compare diff vs union implementations
