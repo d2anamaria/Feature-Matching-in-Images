@@ -427,7 +427,7 @@ vector<DMatch> filterBestMatches(vector<DMatch> matches, int maxMatches)
 
 // ------------------------------------ MATCHING EVALUATION -------------------------------------------
 
-void evaluateMatchesWithAffine(
+Mat evaluateMatchesWithAffine(
     const vector<KeyPoint>& keypoints1,
     const vector<KeyPoint>& keypoints2,
     const vector<DMatch>& matches
@@ -441,7 +441,7 @@ void evaluateMatchesWithAffine(
 
     if (pts1.size() < 3) {
         cout << "Not enough matches for affine estimation." << endl;
-        return;
+        return Mat();
     }
 
     Mat inlierMask;
@@ -451,12 +451,12 @@ void evaluateMatchesWithAffine(
         pts2,
         inlierMask,
         RANSAC,
-        3.0
+        7.0
     );
 
     if (affine.empty()) {
         cout << "Affine estimation failed." << endl;
-        return;
+        return Mat();;
     }
 
     int inliers = countNonZero(inlierMask);
@@ -464,10 +464,13 @@ void evaluateMatchesWithAffine(
 
     cout << "Affine inliers: " << inliers << " / " << matches.size() << endl;
     cout << "Inlier ratio: " << inlierRatio * 100 << "%" << endl;
+
+    return inlierMask;
 }
 
 // estimateAffinePartial2D manual implement
 // highloght correct vs incorrect (red) after affine eval
+
 
 
 // ------------------------ drawing -------------------------
@@ -513,6 +516,43 @@ void showMatches(
     );
 
     imshow(windowName,output);
+}
+
+
+void showMatchesWithInliers(
+    const string& windowName,
+    const Mat_<uchar>& img1,
+    const vector<KeyPoint>& keypoints1,
+    const Mat_<uchar>& img2,
+    const vector<KeyPoint>& keypoints2,
+    const vector<DMatch>& matches,
+    const Mat& inlierMask
+) {
+    Mat output;
+    hconcat(img1, img2, output);
+    cvtColor(output, output, COLOR_GRAY2BGR);
+
+    int offsetX = img1.cols;
+
+    for (int i = 0; i < matches.size(); i++) {
+        Point2f p1 = keypoints1[matches[i].queryIdx].pt;
+        Point2f p2 = keypoints2[matches[i].trainIdx].pt;
+
+        p2.x += offsetX;
+
+        Scalar color;
+
+        if (inlierMask.at<uchar>(i))
+            color = Scalar(0, 255, 0);
+        else
+            color = Scalar(0, 0, 255);
+
+        line(output, p1, p2, color, 1);
+        circle(output, p1, 3, color, FILLED);
+        circle(output, p2, 3, color, FILLED);
+    }
+
+    imshow(windowName, output);
 }
 
 
@@ -572,17 +612,25 @@ int main()
     // cout<<"Total matches: "<<matchesBuiltIn.size()<<endl;
     // cout<<"Displayed matches: "<<goodMatchesBuiltIn.size()<<endl;
 
-    showMatches(
-        "OpenCV BFMatcher crossCheck",
+    // showMatches(
+    //     "OpenCV BFMatcher crossCheck",
+    //     img1,
+    //     keypoints1,
+    //     img2,
+    //     keypoints2,
+    //     goodMatchesBuiltIn
+    // );
+
+    printf("Built In:\n");
+    Mat inlierMask = evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesBuiltIn);
+    showMatchesWithInliers(
+        "Affine checked matches Built-In",
         img1,
         keypoints1,
         img2,
         keypoints2,
-        goodMatchesBuiltIn
-    );
-
-    printf("Built In:\n");
-    evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesBuiltIn);
+        goodMatchesBuiltIn,
+        inlierMask);
 
     // auto matchesHarrisBuiltIn = matchDescriptorsBuiltIn(descriptorsHarris1, descriptorsHarris2);
     // auto goodMatchesHarrisBuiltIn = filterBestMatches(matchesHarrisBuiltIn, maxMatches);
@@ -606,17 +654,35 @@ int main()
 
     auto matchesClosest=matchCrossCheck(descriptors1, descriptors2,matchNearestNeighbor);
     auto goodMatchesClosest=filterBestMatches(matchesClosest, maxMatches);
-    showMatches("Manual mutual matching (closest neighb)",img1,keypoints1,img2,keypoints2,goodMatchesClosest);
+    // showMatches("Manual mutual matching (closest neighb)",img1,keypoints1,img2,keypoints2,goodMatchesClosest);
 
     auto matchesRatio=matchCrossCheck(descriptors1, descriptors2,matchRatioTest);
     auto goodMatchesRatio=filterBestMatches(matchesRatio, maxMatches);
-    showMatches("Manual mutual matching (ratio test)",img1,keypoints1,img2,keypoints2,goodMatchesRatio);
+    // showMatches("Manual mutual matching (ratio test)",img1,keypoints1,img2,keypoints2,goodMatchesRatio);
 
 
     printf("\nNearest Neighb:\n");
-    evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesClosest);
+    Mat inlierMaskClosest = evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesClosest);
+    showMatchesWithInliers(
+        "Affine checked matches Closest",
+        img1,
+        keypoints1,
+        img2,
+        keypoints2,
+        goodMatchesClosest,
+        inlierMaskClosest);
+
     printf("\nRatio Test:\n");
-    evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesRatio);
+    Mat inlierMaskRatio =evaluateMatchesWithAffine(keypoints1, keypoints2, goodMatchesRatio);
+    showMatchesWithInliers(
+        "Affine checked matches Ratio",
+        img1,
+        keypoints1,
+        img2,
+        keypoints2,
+        goodMatchesRatio,
+        inlierMaskRatio);
+
 
     //------------------------------------------------------------------------------------  COMPARISONS
     // compare diff vs union implementations
