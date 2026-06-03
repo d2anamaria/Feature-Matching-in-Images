@@ -13,6 +13,7 @@
 #include <opencv2/features2d.hpp>
 #include <opencv2/core/utils/logger.hpp>
 
+
 #include <iostream>
 #include <vector>
 #include <algorithm>
@@ -80,7 +81,7 @@ Mat_<uchar> computeBinaryDescriptors(const Mat_<uchar>& img, const vector<KeyPoi
     // compare each patch pixel with right and down neighbor
     int nrComparisons = patchSize * patchSize * 2;
 
-    // 8 comparisons are packed into 1 byte
+    // 8 comparisons are packed into 1 byte => 64 bytes
     int descriptorBytes = (nrComparisons + 7) / 8;
 
     Mat_<uchar> descriptors((int)keypoints.size(), descriptorBytes);
@@ -157,7 +158,7 @@ void harrisCornerDetection(
 ) {
 
     Mat_<uchar> smooth;
-    GaussianBlur(img, smooth, Size(5, 5), 1.0); //?? best kernel?
+    GaussianBlur(img, smooth, Size(5, 5), 1.0);
 
     Mat_<float> Ix, Iy;
     Sobel(smooth, Ix, CV_32F, 1, 0, 3); //first derivative on x axis
@@ -446,7 +447,7 @@ Mat evaluateMatchesWithAffine(
 
     Mat inlierMask;
 
-    Mat affine = estimateAffinePartial2D(
+    Mat affine = estimateAffine2D(
         pts1,
         pts2,
         inlierMask,
@@ -577,6 +578,10 @@ int main()
     extractFeatures(img1, keypoints1, descriptors1);
     extractFeatures(img2, keypoints2, descriptors2);
 
+    // descriptors1 = computeBinaryDescriptors(img1, keypoints1);
+    // descriptors2 = computeBinaryDescriptors(img2, keypoints2);
+
+
     cout<<"Image 1 keypoints: "<<keypoints1.size()<<endl;
     cout<<"Image 2 keypoints: "<<keypoints2.size()<<endl;
 
@@ -632,20 +637,36 @@ int main()
         goodMatchesBuiltIn,
         inlierMask);
 
-    // auto matchesHarrisBuiltIn = matchDescriptorsBuiltIn(descriptorsHarris1, descriptorsHarris2);
-    // auto goodMatchesHarrisBuiltIn = filterBestMatches(matchesHarrisBuiltIn, maxMatches);
-    //
-    // cout<<"Total matches HARRIS: "<<matchesHarrisBuiltIn.size()<<endl;
-    // cout<<"Displayed matches HARRIS: "<<goodMatchesHarrisBuiltIn.size()<<endl;
-    //
-    // showMatches("HARRIS matches",
-    //     img1,
-    //     keypointsHarris1,
-    //     img2,
-    //     keypointsHarris2,
-    //     goodMatchesHarrisBuiltIn
-    //     );
-
+//     auto matchesHarrisBuiltIn = matchDescriptorsBuiltIn(descriptorsHarris1, descriptorsHarris2);
+//     auto goodMatchesHarrisBuiltIn = filterBestMatches(matchesHarrisBuiltIn, maxMatches);
+//
+//     cout<<"Total matches HARRIS: "<<matchesHarrisBuiltIn.size()<<endl;
+//     cout<<"Displayed matches HARRIS: "<<goodMatchesHarrisBuiltIn.size()<<endl;
+//
+//     showMatches("HARRIS matches",
+//         img1,
+//         keypointsHarris1,
+//         img2,
+//         keypointsHarris2,
+//         goodMatchesHarrisBuiltIn
+//         );
+//
+//     printf("\nHarris:\n");
+//      Mat inlierMaskRatioHarris =evaluateMatchesWithAffine(
+//         keypointsHarris1,
+//         keypointsHarris2,
+//         goodMatchesHarrisBuiltIn
+//     );
+//
+//     showMatchesWithInliers(
+//     "HARRIS affine validation",
+//     img1,
+//     keypointsHarris1,
+//     img2,
+//     keypointsHarris2,
+//     goodMatchesHarrisBuiltIn,
+//     inlierMaskRatioHarris
+// );
     //------------------------------------------------------------------------------------- MANUAL MATCHING
 
     // auto matches1=matchUnique(descriptors1, descriptors2);
